@@ -1,0 +1,25 @@
+# Environment
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Raw/processed data -- large, reproducibly fetched, not committed
+data/raw/*
+!data/raw/.gitkeep
+!data/raw/*.dvc
+data/processed/*
+!data/processed/.gitkeep
+
+# mlruns/ (artifact store) and mlflow.db (SQLite tracking/registry metadata)
+# ARE committed, deliberately -- see docs/architecture.md. In a real
+# deployment these would live in a remote MLflow server + object store, not
+# git; committed here only so this portfolio project's Docker image and API
+# are reproducible from a clone without re-running training first.
+
+# Prediction log grows unbounded at runtime -- not committed
+monitoring/prediction_log.jsonl
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,5 @@
+outs:
+- md5: 178bcf9bb1f31a3dfe12d0e577884add
+  size: 150829308
+  hash: md5
+  path: creditcard.arff
