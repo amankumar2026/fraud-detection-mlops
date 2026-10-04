@@ -23,6 +23,34 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 N_CHUNKS = 5
 
 
+PRECISION_DROP_ALERT = 0.2
+PR_AUC_DROP_ALERT = 0.2
+MIN_FRAUD_PER_CHUNK = 5
+
+
+def find_degradation_alerts(report):
+    """Compares each chunk to the median of all earlier chunks, so a temporary
+    dip is caught even when the last chunk has recovered. Chunks with fewer
+    than MIN_FRAUD_PER_CHUNK true frauds are skipped: one flipped prediction
+    swings precision/PR-AUC too much to alert on."""
+    alerts = []
+    for i in range(2, len(report)):
+        chunk = report.iloc[i]
+        if chunk["n_fraud"] < MIN_FRAUD_PER_CHUNK:
+            continue
+        earlier = report.iloc[:i]
+        reasons = []
+        base_precision = earlier["precision"].median()
+        base_pr_auc = earlier["pr_auc"].median()
+        if chunk["precision"] < base_precision - PRECISION_DROP_ALERT:
+            reasons.append(f"precision {chunk['precision']:.3f} vs baseline {base_precision:.3f}")
+        if chunk["pr_auc"] < base_pr_auc - PR_AUC_DROP_ALERT:
+            reasons.append(f"PR-AUC {chunk['pr_auc']:.3f} vs baseline {base_pr_auc:.3f}")
+        if reasons:
+            alerts.append({"chunk": int(chunk["chunk"]), "reasons": reasons})
+    return alerts
+
+
 def main():
     mlflow.set_tracking_uri(f"sqlite:///{PROJECT_ROOT / 'mlflow.db'}")
     client = MlflowClient()
@@ -69,12 +97,14 @@ def main():
               f"pr_auc={row['pr_auc']:.3f}")
 
     report = pd.DataFrame(rows)
-    if len(report) >= 2:
-        pr_auc_trend = report["pr_auc"].iloc[-1] - report["pr_auc"].iloc[0]
-        print(f"\nPR-AUC change from first to last chunk: {pr_auc_trend:+.3f}")
-        if pr_auc_trend < -0.1:
-            print("WARNING: real performance decline across the test period -- would "
-                  "trigger a retraining alert in production.")
+    alerts = find_degradation_alerts(report)
+    report["alert"] = report["chunk"].isin([a["chunk"] for a in alerts])
+    if alerts:
+        print("\nALERTS (each chunk compared to the median of all earlier chunks):")
+        for a in alerts:
+            print(f"  chunk {a['chunk']}: {', '.join(a['reasons'])}")
+    else:
+        print("\nNo degradation alerts.")
 
     Path("monitoring").mkdir(exist_ok=True)
     report.to_csv("monitoring/performance_over_time.csv", index=False)

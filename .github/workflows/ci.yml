@@ -26,6 +26,11 @@ jobs:
       - name: Lint (ruff)
         run: ruff check src/ api/ scripts/ tests/
 
+      - name: Point MLflow artifact paths at this runner
+        # mlflow.db stores artifact paths from the machine that trained the model
+        # (Windows). Rewrite them to this checkout, the same step the Dockerfile does.
+        run: python scripts/rewrite_artifact_paths.py mlflow.db "file://${GITHUB_WORKSPACE}/mlruns"
+
       - name: Run unit tests
         run: pytest tests/ -v
 
