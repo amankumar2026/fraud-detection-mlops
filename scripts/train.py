@@ -21,7 +21,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import mlflow
 import mlflow.sklearn
+import numpy as np
 import pandas as pd
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline as ImbPipeline
 from mlflow.tracking import MlflowClient
 from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyClassifier
@@ -32,6 +35,7 @@ from sklearn.metrics import (
     average_precision_score,
     confusion_matrix,
     f1_score,
+    precision_recall_curve,
     precision_score,
     recall_score,
     roc_auc_score,
@@ -82,6 +86,25 @@ def evaluate(y_true, y_pred, y_proba):
         "pr_auc": average_precision_score(y_true, y_proba),
         "roc_auc": roc_auc_score(y_true, y_proba),
     }
+
+
+SMOTE_RATIO = 0.2  # minority-to-majority ratio after oversampling; see docs/results_and_findings.md
+# Same in-process trust opt-in as the Random Forest and XGBoost models.
+IMBLEARN_TRUSTED_TYPES = ["imblearn.over_sampling._smote.base.SMOTE", "imblearn.pipeline.Pipeline"]
+
+
+def make_smote():
+    return SMOTE(sampling_strategy=SMOTE_RATIO, k_neighbors=5, random_state=42)
+
+
+def best_f1_on(y_true, proba):
+    """Best F1 achievable on this split by choosing a threshold. Reported for
+    comparison only: the threshold is picked on the same split it's scored on,
+    so this is optimistic and is not used for model selection."""
+    precision, recall, thresholds = precision_recall_curve(y_true, proba)
+    f1 = 2 * precision * recall / (precision + recall + 1e-12)
+    best = int(np.nanargmax(f1[:-1]))
+    return float(f1[best]), float(thresholds[best])
 
 
 def log_pr_curve(y_true, y_proba, run_name):
@@ -237,11 +260,74 @@ def main():
         print(f"\nXGBoost (val, best of 8 random-search configs): {metrics}")
         results["xgboost"] = (best_xgb, metrics, run.info.run_id)
 
+    # --- SMOTE variants. Oversampling is a pipeline step, so it runs only inside
+    # fit() on training data; validation and test data are never resampled.
+    # Class weights are dropped here so the only difference from the
+    # class-weighted model is the resampling strategy. ---
+    print(f"\nSMOTE (sampling_strategy={SMOTE_RATIO}, training data only)...")
+    lr_smote_params = {"max_iter": 1000, "C": 1.0, "random_state": 42}
+    with mlflow.start_run(run_name="logistic_regression_smote") as run:
+        lr_s = ImbPipeline([("prep", make_preprocessor()), ("smote", make_smote()),
+                            ("clf", LogisticRegression(**lr_smote_params))])
+        lr_s.fit(X_train, y_train)
+        y_proba = lr_s.predict_proba(X_val)[:, 1]
+        y_pred = lr_s.predict(X_val)
+        metrics = evaluate(y_val, y_pred, y_proba)
+        bf1, bthr = best_f1_on(y_val, y_proba)
+        mlflow.log_params({"model": "LogisticRegression", "imbalance": "smote",
+                           "smote_ratio": SMOTE_RATIO, **lr_smote_params})
+        mlflow.log_metrics({**metrics, "val_best_f1": bf1, "val_best_f1_threshold": bthr})
+        log_pr_curve(y_val, y_proba, "logreg_smote")
+        log_confusion_matrix(y_val, y_pred, "logreg_smote")
+        mlflow.sklearn.log_model(lr_s, "model", input_example=X_train.head(2),
+                                 skops_trusted_types=IMBLEARN_TRUSTED_TYPES)
+        results["logreg_smote"] = (lr_s, {**metrics, "val_best_f1": bf1}, run.info.run_id)
+        print(f"Logistic Regression + SMOTE (val): {metrics}  best F1={bf1:.3f}")
+
+    rf_smote_params = dict(best_params)  # same tuned settings as the class-weighted RF, not re-tuned
+    with mlflow.start_run(run_name="random_forest_smote") as run:
+        rf_s = ImbPipeline([("prep", make_preprocessor()), ("smote", make_smote()),
+                            ("clf", RandomForestClassifier(random_state=42, n_jobs=-1, **rf_smote_params))])
+        rf_s.fit(X_train, y_train)
+        y_proba = rf_s.predict_proba(X_val)[:, 1]
+        y_pred = rf_s.predict(X_val)
+        metrics = evaluate(y_val, y_pred, y_proba)
+        bf1, bthr = best_f1_on(y_val, y_proba)
+        mlflow.log_params({"model": "RandomForestClassifier", "imbalance": "smote",
+                           "smote_ratio": SMOTE_RATIO, **rf_smote_params})
+        mlflow.log_metrics({**metrics, "val_best_f1": bf1, "val_best_f1_threshold": bthr})
+        log_pr_curve(y_val, y_proba, "rf_smote")
+        log_confusion_matrix(y_val, y_pred, "rf_smote")
+        mlflow.sklearn.log_model(rf_s, "model", input_example=X_train.head(2),
+                                 skops_trusted_types=["sklearn.tree._tree.Tree"] + IMBLEARN_TRUSTED_TYPES)
+        results["random_forest_smote"] = (rf_s, {**metrics, "val_best_f1": bf1}, run.info.run_id)
+        print(f"Random Forest + SMOTE (val): {metrics}  best F1={bf1:.3f}")
+
+    # --- Record F1 for the class-weighted models too, so all five are comparable ---
+    for key in ["logreg", "random_forest", "xgboost"]:
+        model_obj, metrics, run_id = results[key]
+        bf1, bthr = best_f1_on(y_val, model_obj.predict_proba(X_val)[:, 1])
+        metrics["val_best_f1"] = bf1
+        with mlflow.start_run(run_id=run_id):
+            mlflow.log_metrics({"val_best_f1": bf1, "val_best_f1_threshold": bthr})
+
     # --- Pick the winner by val PR-AUC, evaluate ONCE on the held-out test set ---
     candidates = {k: v for k, v in results.items() if k != "baseline"}
     winner_name = max(candidates, key=lambda k: candidates[k][1]["pr_auc"])
     winner_model, _, winner_run_id = candidates[winner_name]
     print(f"\n=== Winner by val PR-AUC: {winner_name} ===")
+
+    print("\n=== All candidates on VALIDATION (selection set) ===")
+    print(f"{'Model':<24}{'Precision':>10}{'Recall':>9}{'F1@0.5':>9}{'Best F1':>9}{'PR-AUC':>9}")
+    for name, (_, m, _) in candidates.items():
+        print(f"{name:<24}{m['precision']:>10.3f}{m['recall']:>9.3f}{m['f1']:>9.3f}"
+              f"{m['val_best_f1']:>9.3f}{m['pr_auc']:>9.3f}")
+
+    print("\n=== All candidates on TEST (reported only, not used for selection) ===")
+    print(f"{'Model':<24}{'Precision':>10}{'Recall':>9}{'F1@0.5':>9}{'PR-AUC':>9}")
+    for name, (model_obj, _, _) in candidates.items():
+        tm = evaluate(y_test, model_obj.predict(X_test), model_obj.predict_proba(X_test)[:, 1])
+        print(f"{name:<24}{tm['precision']:>10.3f}{tm['recall']:>9.3f}{tm['f1']:>9.3f}{tm['pr_auc']:>9.3f}")
 
     y_pred_test = winner_model.predict(X_test)
     y_proba_test = winner_model.predict_proba(X_test)[:, 1]

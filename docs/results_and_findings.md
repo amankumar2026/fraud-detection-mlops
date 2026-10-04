@@ -71,6 +71,51 @@ PCA-anonymized components. Unlike the CLV project's interpretable RFM features, 
 dataset's anonymization genuinely limits business interpretability here; honest to say so
 rather than invent a story for what V15 "means."
 
+### Class imbalance: class weighting vs. SMOTE (same split, SMOTE on training data only)
+
+SMOTE synthesizes new fraud examples by interpolating between real ones. It runs inside the
+training pipeline, so validation and test data are never oversampled. Ratio: minority set to 20%
+of the majority (about 39,000 synthetic frauds from 366 real ones). Full balancing would have
+roughly doubled the training set with mostly synthetic fraud, so I used the moderate ratio.
+
+Validation (selection set):
+
+| Model | Precision | Recall | F1 @0.5 | Best F1* | PR-AUC |
+|---|---|---|---|---|---|
+| Logistic Regression, class-weighted | 0.030 | 0.927 | 0.058 | 0.845 | 0.843 |
+| Logistic Regression + SMOTE | 0.165 | 0.891 | 0.278 | 0.793 | 0.816 |
+| Random Forest, class-weighted (deployed) | 1.000 | 0.745 | 0.854 | 0.874 | 0.869 |
+| Random Forest + SMOTE | 0.977 | 0.782 | 0.869 | 0.891 | 0.870 |
+| XGBoost, class-weighted | 0.978 | 0.800 | 0.880 | 0.880 | 0.863 |
+
+Test (reported only, not used for selection):
+
+| Model | Precision | Recall | F1 @0.5 | PR-AUC |
+|---|---|---|---|---|
+| Logistic Regression, class-weighted | 0.022 | 0.885 | 0.043 | 0.720 |
+| Logistic Regression + SMOTE | 0.129 | 0.788 | 0.221 | 0.657 |
+| **Random Forest, class-weighted (deployed)** | **0.905** | 0.731 | **0.809** | **0.776** |
+| Random Forest + SMOTE | 0.867 | 0.750 | 0.804 | 0.768 |
+| XGBoost, class-weighted | 0.780 | 0.750 | 0.765 | 0.763 |
+
+\* Best F1 is the highest F1 achievable by choosing a threshold on that same split. It's optimistic,
+so it's shown for comparison, not for selection.
+
+What this shows:
+- **SMOTE did not beat class weighting for the deployed model.** On test, Random Forest with
+  class weights has higher PR-AUC (0.776 vs 0.768) and F1 (0.809 vs 0.804).
+- **Validation was a tie.** Random Forest + SMOTE edged ahead on validation PR-AUC by 0.001 and
+  was selected as the validation winner. That margin is within noise, and the test-set promotion
+  rule correctly kept the class-weighted model in Production.
+- **For logistic regression, SMOTE raised recall but cost much more precision** (0.022 to 0.129
+  on test). Neither version is deployable on its own.
+- Threshold choice matters a lot for some models and not others: logistic regression's
+  validation F1 goes from 0.058 at the default 0.5 threshold to 0.845 at its best threshold,
+  while XGBoost's doesn't change (0.880 both ways).
+
+The Random Forest + SMOTE model was registered as version 3 and kept in Staging. Production stays
+version 1.
+
 ## 3. Model registry: a real champion-challenger promotion, not a manual pick
 
 `scripts/train.py` registered the Random Forest model as `fraud-detector` v1 and checked
