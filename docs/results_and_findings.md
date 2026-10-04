@@ -30,6 +30,12 @@ API). Nothing here is estimated or illustrative.
 | Stratified-random baseline | 0.000 | 0.000 | 0.0013 |
 | Logistic Regression (`class_weight=balanced`) | **0.030** | 0.927 | 0.843 |
 | Random Forest (tuned, 8-config random search) | **1.000** | 0.745 | **0.869** |
+| XGBoost (tuned, 8-config random search, `scale_pos_weight` for imbalance) | 0.978 | 0.800 | 0.863 |
+
+XGBoost was trained and compared as a third candidate. It came close (PR-AUC 0.863 vs.
+0.869) but Random Forest won on validation PR-AUC, so Random Forest is the deployed model.
+XGBoost's test-set metrics aren't logged because it wasn't the winner. It was registered as
+version 2 and kept in Staging, since it didn't beat the Production model on test PR-AUC.
 
 **A real, business-relevant finding, not a footnote**: Logistic Regression's recall looks
 great (92.7%) but its precision is 0.030 — 1,667 false positives on the validation set
