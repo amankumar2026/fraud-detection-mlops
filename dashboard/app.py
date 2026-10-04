@@ -9,16 +9,15 @@ from pathlib import Path
 
 import mlflow
 import mlflow.sklearn
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from mlflow.tracking import MlflowClient
-from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score
+from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-from src.features import prepare_model_input
+from src.features import prepare_model_input  # noqa: E402  (path set up above)
 
 MODEL_NAME = "fraud-detector"
 TRACKING_URI = f"sqlite:///{PROJECT_ROOT / 'mlflow.db'}"

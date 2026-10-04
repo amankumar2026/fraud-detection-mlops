@@ -19,8 +19,8 @@ from fastapi import FastAPI, HTTPException
 from mlflow.tracking import MlflowClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.features import prepare_model_input
 from api.schemas import ModelInfoResponse, PredictionResponse, TransactionRequest
+from src.features import prepare_model_input
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # SQLite, not a plain file store -- see scripts/train.py for why (this

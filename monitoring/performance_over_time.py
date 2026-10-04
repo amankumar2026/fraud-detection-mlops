@@ -12,7 +12,6 @@ from pathlib import Path
 
 import mlflow
 import mlflow.sklearn
-import numpy as np
 import pandas as pd
 from mlflow.tracking import MlflowClient
 from sklearn.metrics import average_precision_score, precision_score, recall_score
@@ -32,7 +31,7 @@ def main():
         print("No Production model found -- run scripts/train.py first.")
         return
 
-    model = mlflow.sklearn.load_model(f"models:/fraud-detector/Production")
+    model = mlflow.sklearn.load_model("models:/fraud-detector/Production")
     print(f"Loaded Production model v{prod[0].version}")
 
     test_df = pd.read_csv("data/processed/test.csv").sort_values("Time").reset_index(drop=True)
